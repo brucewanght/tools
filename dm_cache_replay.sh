@@ -14,6 +14,14 @@ elif [ "$policy" != "lru" -a "$policy" != "smq" ];then
 	exit 1
 fi
 
+tm=$3
+if [ "$tm" == "" ];then 
+	echo "default run time is 300 seconds"
+	tm="300"
+else
+	echo "run time is $tm seconds"
+fi
+
 if [ ! -f $1 ];then 
 	echo "trace file $1 dosen't exist!"
 	exit 1
@@ -21,51 +29,47 @@ fi
 
 #cache block size is 32K
 
-live=$(ls /dev/mapper/ |grep my_cache1) 
+live=$(ls /dev/mapper/ |grep my_cache) 
 if [ "$live" != "" ];then
-	echo "remove old my_cache1"
-	dmsetup remove /dev/mapper/my_cache1 
+	echo "remove old my_cache"
+	dmsetup remove /dev/mapper/my_cache 
 	losetup -d /dev/loop6 
 	if [ $? != 0 ];then
 		exit 1
 	fi
 fi
 
-dev_live=$(ls /dev/ |grep cachedev) 
+dev_live=$(ls /dev/ |grep cachedev0) 
 if [ "$dev_live" == "" ];then
-	echo "create cachedev with pblk"
-	nvme lnvm create -d nvme1n1 -n cachedev -t pblk -b 0 -e 127 -f
-	if [ $? != 0 ];then
-		exit 1
-	fi
+	echo "cachedev0 doesn't exist!"
+	exit 1
 fi
 
-for size in $(seq 90 100)
+sectors=$(blockdev --getsz /dev/sdd)
+size=(1 2 3 4 5 6)
+mrcf="my_cache_$policy.mrc"
+perf="my_cache_$policy.perf"
+for size in ${size[@]}
 do
 	cbks=$(awk 'BEGIN{print '$size'*1024*1024/32}')
 	echo "test cache size: $size, cache blocks: $cbks"
 
-	dd if=/dev/zero of=/tmp/meta.img bs=1M count=1024
+	dd if=/dev/zero of=/tmp/meta.img bs=1M count=2048
 	losetup /dev/loop6 /tmp/meta.img
 	if [ $? != 0 ];then
 		exit 1
 	fi
 
-	dmsetup create my_cache1 --table '0 625142448 cache 0 1 /dev/loop6 /dev/cachedev /dev/sdc 64 '$cbks' 1 writeback '$policy' 0'
+	dmsetup create my_cache --table '0 '$sectors' cache 0 0 /dev/loop6 /dev/cachedev /dev/sdd 64 0 '$cbks' 1 writeback '$policy' 0'
+
 	if [ $? != 0 ];then
+		echo "create dm-cache failed!"
 		exit 1
 	fi
 
-	for i in $(seq 1 5)
-	do
-		./replay -a 4K -b 4K -n 32 -s 900G /dev/mapper/my_cache1 $1 >>$1_$policy.perf
-	done
+	./replay -a 4K -b 4K -n 32 -s 900G -t $tm /dev/mapper/my_cache $1 >>$perf 
+	./miss_ratio.sh $mrcf 
 
-	if [ $? != 0 ];then
-		exit 1
-	fi
-	./miss_ratio.sh my_cache1_$1_$policy.mrc
-
-	dmsetup remove /dev/mapper/my_cache1 
+	dmsetup remove /dev/mapper/my_cache 
 	losetup -d /dev/loop6 
 done
