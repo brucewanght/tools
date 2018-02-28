@@ -35,12 +35,11 @@ using namespace std;
 
 #define AIO_BLKSIZE	(64*1024)
 #define AIO_MAXIO	32
-#define random(x) (rand()%x)
+#define random(x)   (rand()%x)
 
 static int aio_blksize = AIO_BLKSIZE;
 static int aio_maxio = AIO_MAXIO;
 static int devfd;		    // device fd
-static int tracefd;		    // trace fd
 static int debug = 0;       // debug option, 1 for debug
 static int is_write = 0;    // is write or not, read default
 static int count_io_q_waits;// how many time io_queue_wait called
@@ -351,7 +350,7 @@ int main(int argc, char *const *argv)
     fin.read((char *)(&max_lbn),4);
     disk_size = max_lbn*aio_blksize/1024/1024/1024;
 
-    /* initialize io state machine */
+    // initialize io state machine 
     memset(&myctx, 0, sizeof(myctx));
     io_queue_init(aio_maxio, &myctx);
 
