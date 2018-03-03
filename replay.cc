@@ -39,16 +39,16 @@ using namespace std;
 
 static int aio_blksize = AIO_BLKSIZE;
 static int aio_maxio = AIO_MAXIO;
-static int devfd;		      // device fd
+static int devfd;             // device fd
 static int debug = 0;         // debug option, 1 for debug
 static int is_write = 0;      // is write or not, read default
-static int alignment = 512;	  // buffer alignment, 512B default
+static int alignment = 512;   // buffer alignment, 512B default
 static int count_io_q_waits;  // how many time io_queue_wait called
-static int iocb_free_count;	  // current free count
+static int iocb_free_count;   // current free count
 static int dev_open_flag = O_RDONLY|O_DIRECT;//open flags on dev
 
-static uint64_t busy = 0;	  // number of I/O's in flight
-static uint64_t nr_io = 0;	  // number of blocks left to read or write
+static uint64_t busy = 0;     // number of I/O's in flight
+static uint64_t nr_io = 0;    // number of blocks left to read or write
 static uint64_t nr_done = 0;  // number of blocks done
 static uint64_t dev_size = 0; // target device size
 static uint32_t run_time = 0; // run time of replay, 0 means no timeout
