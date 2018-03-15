@@ -36,6 +36,9 @@ using namespace std;
 #define AIO_BLKSIZE (64*1024)
 #define AIO_MAXIO   32
 
+static const char *trace_name = NULL;
+static const char *dev_name = NULL;
+static int dev_open_flag = O_RDWR|O_DIRECT;//open flags on dev
 static int devfd;             // device fd
 static FILE* tracefd;         // trace fd
 static int debug = 0;         // debug option, 1 for debug
@@ -43,35 +46,28 @@ static int is_write = 0;      // is write or not, read default
 static int alignment = 512;   // buffer alignment, 512B default
 static int count_io_q_waits;  // how many time io_queue_wait called
 static int iocb_free_count;   // current free count
-static int dev_open_flag = O_RDONLY|O_DIRECT;//open flags on dev
+static uint32_t run_time = 0; // run time of replay, 0 means no timeout
+static uint32_t round = 1;    // how many rounds to replay the trace
+static uint32_t max_lbn=0;    // max lbn number from trace
 
 static uint32_t aio_blksize = AIO_BLKSIZE;   // aio block size, 64KB default
 static uint32_t aio_maxio = AIO_MAXIO;       // number of io submited once, 32 default
 static uint32_t cbk_size = 64*512;           // cache block size, 32KB default
 
-static uint32_t run_time = 0; // run time of replay, 0 means no timeout
-static uint32_t round = 1;    // how many rounds to replay the trace
-static uint32_t max_lbn=0;    // max lbn number from trace
-
-static uint64_t max_dev_lbn = 0; //max lbn on the target devicec
-static uint64_t fsize = 0;       //trace file size
-static uint64_t num = 0;         //num of lbns in trace file
+static uint64_t max_dev_lbn = 0; // max lbn on the target devicec
+static uint64_t fsize = 0;       // trace file size
+static uint64_t num = 0;         // num of lbns in trace file
 static uint64_t nr_done = 0;     // number of blocks done
+static uint64_t nr_io = 0;       // number of blocks left to read or write
 static uint64_t max_io = 0;      // max number of io to replay
 static uint64_t dev_size = 0;    // target device size
 static uint64_t busy = 0;        // number of I/O's in flight
-static uint64_t nr_io = 0;       // number of blocks left to read or write
-
 static double disk_size=0.0;     //disk size we need(GB)
-static double data_size=0.0;     //io data size(GB)
 
-static const char *trace_name = NULL;
-static const char *dev_name = NULL;
-
-struct iocb **iocb_free;      // array of pointers to iocb
-struct timeval delay;	      // delay between i/o
-struct timespec rep_start,rep_end;    //rep_start and end time
-double tc;                    //time consumed
+struct iocb **iocb_free;           // array of pointers to iocb
+struct timeval delay;	           // delay between i/o
+struct timespec rep_start,rep_end; //replay start and end time
+double tc;                         //time consumed
 
 /* get file size */
 uint64_t get_file_size(const char* filename)
@@ -174,7 +170,7 @@ static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
         --nr_io;
     if (busy > 0)
         --busy;
-    nr_done ++;
+    ++nr_done;
     free_iocb(iocb);
 }
 
@@ -200,7 +196,7 @@ static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
         --nr_io;
     if (busy > 0)
         --busy;
-    nr_done ++;
+    ++nr_done;
     free_iocb(iocb);
 }
 
@@ -237,10 +233,10 @@ long long scale_by_kmg(long long value, char scale)
 /* replay the trace*/
 int replay_trace(FILE *tracefd)
 {
-    int rc = 0;            //return value of io operation
-    uint32_t lbn;          //lbn from trace
-    off_t offset = 0;
-    nr_io = num;           // number of blocks left to read or write
+    int rc = 0;       // return value of io operation
+    uint32_t lbn;     // lbn from trace
+    off_t offset = 0; // io offset on the target device
+    nr_io = num;      // number of lbns left to replay
 
     /* initialize io state machine */
     io_context_t myctx;
@@ -257,10 +253,12 @@ int replay_trace(FILE *tracefd)
     fseek(tracefd, 0, SEEK_SET);
     while (nr_io > 0)
     {
-        // check if the runtime is reached, jump to the end if so
+        // check if the runtime is reached, stop replaying if so
         clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
         if (run_time && ((rep_end.tv_sec - rep_start.tv_sec) >= run_time))
             return 0;
+
+        // check if the max_io is reached, stop replaying if so
         if ((max_io>0) && (nr_done >= max_io*aio_maxio))
             return 0;
 
@@ -273,38 +271,32 @@ int replay_trace(FILE *tracefd)
             uint32_t i = 0;
             while (i < n)
             {
-                // read a lbn from trace file,
-				// if reach the end then stop replaying
+                // read a lbn from trace file, stop replaying if the end of file is reached
 				if(!fread(&lbn, 4, 1, tracefd))
 					return 0;
-                // lbn need to be smaller than target device size
+                // lbn need to be smaller than target device size, otherwise we discard it
                 if (lbn > max_dev_lbn)
                 {
-                    //we need to ensure the ioq size is equals to n,
-                    //so if lbn is bigger than max_dev_lbn, then we
-                    //just disgard it and go to next lbn.
-                    //However, nr_io shoud reduce 1 since we are counting
-                    //the num of io replayed to stop the program when all
-                    //the lbns in trace file have been processed even the
-                    //time limit is not reached.
+					if (debug)
+					{
+                        cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i = "<<i<<endl;
+					}
+                    /*
+					 * we need to ensure the ioq size is equals to n, so if lbn is bigger than max_dev_lbn, 
+					 * then we just disgard it and go to next lbn. However, nr_io shoud reduce 1 since we 
+					 * are counting the num of io replayed to stop the program when all the lbns in trace 
+					 * file have been processed even the time limit is not reached.
+					 */
                     if (nr_io > 0)
                     {
                         nr_io--;
-                        if (debug)
-                        {
-                            cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i ="<<i<<endl;
-                        }
                         continue;
                     }
                     else
                     {
-                        if (debug)
-                        {
-                            cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i ="<<i<<endl;
-                        }
+						// this means we consumed all the lbns in trace file, so we stop replaying
                         return 0;
                     }
-
                 }
                 // allocate an io callback
                 struct iocb *io = alloc_iocb();
@@ -353,10 +345,11 @@ int replay_trace(FILE *tracefd)
         rc = io_wait_run(myctx, 0);
         if (rc < 0)
             io_error("io_wait_run", rc);
-
     }
     return 0;
 }
+
+
 int main(int argc, char *const *argv)
 {
     int c;
@@ -397,10 +390,10 @@ int main(int argc, char *const *argv)
         case 'r':   // how many rounds
             round = atoi(optarg);
             break;
-        case 'm':   // how many io to replay
+        case 'm':   // how many requests to replay
             max_io = atoi(optarg);
             break;
-        case 'w':   // is write?
+        case 'w':   // write?
             is_write = 1;
             break;
         case 'd':   // debug?
@@ -446,9 +439,8 @@ int main(int argc, char *const *argv)
     max_dev_lbn = dev_size/aio_blksize; //max lbn on the target devicec
     fsize = get_file_size(trace_name);  //trace file size
     num = fsize/4-1;                    //num of lbns in trace file
-    data_size=num*aio_blksize/1024/1024/1024;    //io data size of trace file
 
-    // file operations
+    // open the trace file
     tracefd = fopen(trace_name, "rb");
     if (!tracefd)
     {
@@ -471,7 +463,7 @@ int main(int argc, char *const *argv)
     {
         replay_trace(tracefd);
 		if (debug)
-		    cout <<"replay round "<<ir+1<<" ...done!"<<endl;
+		    cout <<"replay round "<<ir+1<<" ... done!"<<endl;
     }
     // end timing and get the time consumed by this trace replaying
     clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
@@ -479,11 +471,12 @@ int main(int argc, char *const *argv)
 
     // compute the IOPS and throughput(MB/s)
     uint64_t ios = nr_done;                     //the number of ios actually done
+    uint64_t data_size=ios*aio_blksize;         //io data size
     uint64_t iops = ios/tc;                     //IOPS
-    double bw = 1.0*iops*aio_blksize/1024/1024; //MB/s
+    double bw = 1.0*data_size/tc/1024/1024;     //MB/s
 
     //out format: trace_name, device, data_size(GB), time_elapse(s), iops, bw(MB/s)
-    cout<<trace_name<<", "<<dev_name<<", IO data size(GB)="<<1.0*ios*aio_blksize/1024/1024/1024
+    cout<<trace_name<<", "<<dev_name<<", IO data size(GB)="<<1.0*data_size/1024/1024/1024
         <<", time(s)="<<tc<<", iops="<<iops<<", BW(MB/s)="<<bw<<endl;
 
     //close files
