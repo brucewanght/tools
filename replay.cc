@@ -28,9 +28,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <mntent.h>
-#include <time.h>
 #include <iostream>
-#include <fstream>
+#include <time.h>
 #include <libaio.h>
 using namespace std;
 
@@ -38,6 +37,7 @@ using namespace std;
 #define AIO_MAXIO   32
 
 static int devfd;             // device fd
+static FILE* tracefd;         // trace fd
 static int debug = 0;         // debug option, 1 for debug
 static int is_write = 0;      // is write or not, read default
 static int alignment = 512;   // buffer alignment, 512B default
@@ -51,17 +51,27 @@ static uint32_t cbk_size = 64*512;           // cache block size, 32KB default
 
 static uint32_t run_time = 0; // run time of replay, 0 means no timeout
 static uint32_t round = 1;    // how many rounds to replay the trace
-static uint64_t busy = 0;     // number of I/O's in flight
-static uint64_t nr_io = 0;    // number of blocks left to read or write
-static uint64_t nr_done = 0;  // number of blocks done
-static uint64_t max_io = 0;   // max number of io to replay
-static uint64_t dev_size = 0; // target device size
+static uint32_t max_lbn=0;    // max lbn number from trace
+
+static uint64_t max_dev_lbn = 0; //max lbn on the target devicec
+static uint64_t fsize = 0;       //trace file size
+static uint64_t num = 0;         //num of lbns in trace file
+static uint64_t nr_done = 0;     // number of blocks done
+static uint64_t max_io = 0;      // max number of io to replay
+static uint64_t dev_size = 0;    // target device size
+static uint64_t busy = 0;        // number of I/O's in flight
+static uint64_t nr_io = 0;       // number of blocks left to read or write
+
+static double disk_size=0.0;     //disk size we need(GB)
+static double data_size=0.0;     //io data size(GB)
 
 static const char *trace_name = NULL;
 static const char *dev_name = NULL;
 
 struct iocb **iocb_free;      // array of pointers to iocb
 struct timeval delay;	      // delay between i/o
+struct timespec rep_start,rep_end;    //rep_start and end time
+double tc;                    //time consumed
 
 /* get file size */
 uint64_t get_file_size(const char* filename)
@@ -170,7 +180,7 @@ static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 
 /*
  * Read complete callback.
- * Change read iocb into a write iocb and start it.
+ * Change read iocb into a write iocb and rep_start it.
  */
 static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
@@ -224,14 +234,137 @@ long long scale_by_kmg(long long value, char scale)
     return value;
 }
 
+/* replay the trace*/
+int replay_trace(FILE *tracefd)
+{
+    int rc = 0;            //return value of io operation
+    uint32_t lbn;          //lbn from trace
+    off_t offset = 0;
+    nr_io = num;           // number of blocks left to read or write
+
+    /* initialize io state machine */
+    io_context_t myctx;
+    memset(&myctx, 0, sizeof(myctx));
+    io_queue_init(aio_maxio, &myctx);
+
+    if (init_iocb(aio_maxio, aio_blksize) < 0)
+    {
+        cerr<<"Error allocating the i/o buffers"<<endl;
+        exit(1);
+    }
+
+    //return to the begin of file and replay the trace
+    fseek(tracefd, 0, SEEK_SET);
+    while (nr_io > 0)
+    {
+        // check if the runtime is reached, jump to the end if so
+        clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
+        if (run_time && ((rep_end.tv_sec - rep_start.tv_sec) >= run_time))
+            return 0;
+        if ((max_io>0) && (nr_done >= max_io*aio_maxio))
+            return 0;
+
+        // submit as many ios as once as possible up to aio_maxio
+        int n = MIN(MIN(aio_maxio - busy, aio_maxio),nr_io);
+        if (n > 0)
+        {
+            // io callback array
+            struct iocb *ioq[n];
+            uint32_t i = 0;
+            while (i < n)
+            {
+                // read a lbn from trace file,
+				// if reach the end then stop replaying
+				if(!fread(&lbn, 4, 1, tracefd))
+					return 0;
+                // lbn need to be smaller than target device size
+                if (lbn > max_dev_lbn)
+                {
+                    //we need to ensure the ioq size is equals to n,
+                    //so if lbn is bigger than max_dev_lbn, then we
+                    //just disgard it and go to next lbn.
+                    //However, nr_io shoud reduce 1 since we are counting
+                    //the num of io replayed to stop the program when all
+                    //the lbns in trace file have been processed even the
+                    //time limit is not reached.
+                    if (nr_io > 0)
+                    {
+                        nr_io--;
+                        if (debug)
+                        {
+                            cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i ="<<i<<endl;
+                        }
+                        continue;
+                    }
+                    else
+                    {
+                        if (debug)
+                        {
+                            cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i ="<<i<<endl;
+                        }
+                        return 0;
+                    }
+
+                }
+                // allocate an io callback
+                struct iocb *io = alloc_iocb();
+                // set io offset on the target device
+                offset = lbn*(uint64_t)aio_blksize;
+                if (debug)
+                {
+                    //debug: output origin block according the process of map_bio in dm-cache,
+                    //in which one cache block is 64 sectors
+                    uint64_t oblock = (uint64_t)offset/cbk_size;
+                    //cout<<"lbn = "<<lbn<<", offset = "<<offset<<", oblock = "<<oblock<<endl;
+                }
+                // prepare io struct and set callbak
+                if (is_write)
+                {
+                    io_prep_pwrite(io, devfd, io->u.c.buf, aio_blksize, offset);
+                    io_set_callback(io, wr_done);
+                }
+                else
+                {
+                    io_prep_pread(io, devfd, io->u.c.buf, aio_blksize, offset);
+                    io_set_callback(io, rd_done);
+                }
+                // put this io in queue
+                ioq[i] = io;
+                // move to the next io
+                i++;
+            }
+
+            // submit n ios one time
+            rc = io_submit(myctx, n, ioq);
+            if (rc < 0)
+                io_error("io_submit", rc);
+            busy += n;
+
+            // delay a few seconds between ios if the delay is set
+            if (delay.tv_usec)
+            {
+                struct timeval t = delay;
+                (void)select(0, 0, 0, 0, &t);
+            }
+        }
+
+        count_io_q_waits++;
+        // wait at least one io to be completed
+        rc = io_wait_run(myctx, 0);
+        if (rc < 0)
+            io_error("io_wait_run", rc);
+
+    }
+    return 0;
+}
 int main(int argc, char *const *argv)
 {
     int c;
     struct stat st;
     off_t length = 0, offset = 0;
+
     extern char *optarg;
     extern int optind;
-    io_context_t myctx;
 
     // parse the command arguments
     while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:")) != -1)
@@ -240,41 +373,41 @@ int main(int argc, char *const *argv)
 
         switch (c)
         {
-			case 'a':	// alignment of data buffer
-				alignment = strtoul(optarg, &endp, 0);
-				alignment = (long)scale_by_kmg((long long)alignment,*endp);
-				break;
-			case 'D':   // delay in seconds between 2 ios
-				delay.tv_usec = atoi(optarg);
-				break;
-			case 'b':	// block size
-				aio_blksize = strtoul(optarg, &endp, 0);
-				aio_blksize = (uint32_t)scale_by_kmg((long long)aio_blksize, *endp);
-				break;
-			case 'n':	// io depth
-				aio_maxio = strtoul(optarg, &endp, 0);
-				break;
-			case 's':	// dev size
-				dev_size = strtoul(optarg, &endp, 0);
-				dev_size = (uint64_t)scale_by_kmg((long long)dev_size, *endp);
-				break;
-			case 't':   // run time of this trace
-				run_time = atoi(optarg);
-				break;
-			case 'r':   // how many rounds
-				round = atoi(optarg);
-				break;
-			case 'm':   // how many io to replay
-				max_io = atoi(optarg);
-				break;
-			case 'w':   // is write?
-				is_write = 1;
-				break;
-			case 'd':   // debug?
-				debug = 1;
-				break;
-			default:
-				usage();
+        case 'a':	// alignment of data buffer
+            alignment = strtoul(optarg, &endp, 0);
+            alignment = (long)scale_by_kmg((long long)alignment,*endp);
+            break;
+        case 'D':   // delay in seconds between 2 ios
+            delay.tv_usec = atoi(optarg);
+            break;
+        case 'b':	// block size
+            aio_blksize = strtoul(optarg, &endp, 0);
+            aio_blksize = (uint32_t)scale_by_kmg((long long)aio_blksize, *endp);
+            break;
+        case 'n':	// io depth
+            aio_maxio = strtoul(optarg, &endp, 0);
+            break;
+        case 's':	// dev size
+            dev_size = strtoul(optarg, &endp, 0);
+            dev_size = (uint64_t)scale_by_kmg((long long)dev_size, *endp);
+            break;
+        case 't':   // run time of this trace
+            run_time = atoi(optarg);
+            break;
+        case 'r':   // how many rounds
+            round = atoi(optarg);
+            break;
+        case 'm':   // how many io to replay
+            max_io = atoi(optarg);
+            break;
+        case 'w':   // is write?
+            is_write = 1;
+            break;
+        case 'd':   // debug?
+            debug = 1;
+            break;
+        default:
+            usage();
         }
     }
 
@@ -310,131 +443,39 @@ int main(int argc, char *const *argv)
     }
     trace_name = *argv;
 
-    struct timespec start,end;        //start and end time
-    double tc;                        //time consumed
-
-    int rc = 0;                       //return value of io operation
-    uint32_t lbn;                     //lbn from trace
-    uint32_t max_lbn=0;               //max lbn number from trace
-    double disk_size=0.0;             //disk size we need(GB)
-    double data_size=0.0;             //io data size(GB)
-
-    uint64_t max_dev_lbn = dev_size/aio_blksize; //max lbn on the target devicec
-    uint64_t fsize = get_file_size(trace_name);  //trace file size
-    uint64_t num = fsize/4-1;                    //num of lbns in trace file
+    max_dev_lbn = dev_size/aio_blksize; //max lbn on the target devicec
+    fsize = get_file_size(trace_name);  //trace file size
+    num = fsize/4-1;                    //num of lbns in trace file
     data_size=num*aio_blksize/1024/1024/1024;    //io data size of trace file
 
     // file operations
-    ifstream fin;
-    fin.open(trace_name, std::ios::binary);
+    tracefd = fopen(trace_name, "rb");
+    if (!tracefd)
+    {
+        printf("can not find file %s.\n", trace_name);
+        return 0;
+    }
+
     // the last 4B data is max_lbn in trace
-    fin.seekg(-4,fin.end);
-    fin.read((char *)(&max_lbn),4);
+    fseek(tracefd, -4, SEEK_END);
+    if(!fread(&max_lbn, 4, 1, tracefd))
+    {
+        printf("read max_lbn in %s failed .\n", trace_name);
+        return 0;
+    }
     disk_size = max_lbn*aio_blksize/1024/1024/1024;
 
-    /* initialize io state machine */
-    memset(&myctx, 0, sizeof(myctx));
-    io_queue_init(aio_maxio, &myctx);
-
-    if (init_iocb(aio_maxio, aio_blksize) < 0)
-    {
-        cerr<<"Error allocating the i/o buffers"<<endl;
-        exit(1);
-    }
-
     // begin timing
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    clock_gettime(CLOCK_MONOTONIC_RAW, &rep_start);
     for (int ir=0; ir<round; ir++)
     {
-        nr_io = num;
-		if(debug)
-			cout<<"total round of replay = "<<round<<", current round = "<<ir+1<<", max io = "<<max_io<<endl;
-
-        //return to the begin of file and replay the trace
-        fin.seekg(0);
-        while (nr_io > 0)
-        {
-            // check if the runtime is reached, jump to the end if so
-            clock_gettime(CLOCK_MONOTONIC_RAW, &end);
-            if (run_time && ((end.tv_sec - start.tv_sec) >= run_time))
-                goto end_replay;
-			if ((max_io>0) && (nr_done >= max_io*aio_maxio))
-				goto end_replay;
-
-            // submit as many ios as once as possible up to aio_maxio
-            int n = MIN(MIN(aio_maxio - busy, aio_maxio),nr_io);
-            if (n > 0)
-            {
-                // io callback array
-                struct iocb *ioq[n];
-                for (int i = 0; i < n; i++)
-                {
-                    // read a lbn from trace file
-                    fin.read((char *)(&lbn),4);
-                    // lbn need to be smaller than target device size
-					if (lbn > max_dev_lbn)
-					{
-						//we need to ensure the ioq size is equals to n,
-						//so if lbn is bigger than max_dev_lbn, then we
-						//just disgard it and go to next lbn.
-						//In this scenario, we move back the cursor i to i-1.
-						i--;
-						continue;
-					}
-                    // allocate an io callback
-                    struct iocb *io = alloc_iocb();
-                    // set io offset on the target device
-                    offset = lbn*(uint64_t)aio_blksize;
-					if (debug)
-					{
-						//debug: output origin block according the process of map_bio in dm-cache,
-						//in which one cache block is 64 sectors
-						uint64_t oblock = (uint64_t)offset/cbk_size;
-						//cout<<"lbn = "<<lbn<<", offset = "<<offset<<", oblock = "<<oblock<<endl;
-						cout<<oblock<<endl;
-					}
-                    // prepare io struct and set callbak
-                    if (is_write)
-                    {
-                        io_prep_pwrite(io, devfd, io->u.c.buf, aio_blksize, offset);
-                        io_set_callback(io, wr_done);
-                    }
-                    else
-                    {
-                        io_prep_pread(io, devfd, io->u.c.buf, aio_blksize, offset);
-                        io_set_callback(io, rd_done);
-                    }
-                    // put this io in queue
-                    ioq[i] = io;
-                }
-
-                // submit n ios one time
-                rc = io_submit(myctx, n, ioq);
-                if (rc < 0)
-                    io_error("io_submit", rc);
-                busy += n;
-
-                // delay a few seconds between ios if the delay is set
-                if (delay.tv_usec)
-                {
-                    struct timeval t = delay;
-                    (void)select(0, 0, 0, 0, &t);
-                }
-            }
-
-            count_io_q_waits++;
-            // wait at least one io to be completed
-            rc = io_wait_run(myctx, 0);
-            if (rc < 0)
-                io_error("io_wait_run", rc);
-
-        }
+        replay_trace(tracefd);
+		if (debug)
+		    cout <<"replay round "<<ir+1<<" ...done!"<<endl;
     }
-
-end_replay:
     // end timing and get the time consumed by this trace replaying
-    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
-    tc = end.tv_sec - start.tv_sec + (end.tv_nsec - start.tv_nsec)/1000000000.0;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
+    tc = rep_end.tv_sec - rep_start.tv_sec + (rep_end.tv_nsec - rep_start.tv_nsec)/1000000000.0;
 
     // compute the IOPS and throughput(MB/s)
     uint64_t ios = nr_done;                     //the number of ios actually done
@@ -448,8 +489,7 @@ end_replay:
     //close files
     if (devfd != -1)
         close(devfd);
-    fin.close();
+    fclose(tracefd);
 
     return 0;
 }
-
