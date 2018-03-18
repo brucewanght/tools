@@ -43,31 +43,31 @@ static int devfd;             // device fd
 static FILE* tracefd;         // trace fd
 static int debug = 0;         // debug option, 1 for debug
 static int is_write = 0;      // is write or not, read default
-static int alignment = 512;   // buffer alignment, 512B default
-static int count_io_q_waits;  // how many time io_queue_wait called
-static int iocb_free_count;   // current free count
 static uint32_t run_time = 0; // run time of replay, 0 means no timeout
 static uint32_t round = 1;    // how many rounds to replay the trace
 static uint32_t max_lbn=0;    // max lbn number from trace
 
-static uint32_t aio_blksize = AIO_BLKSIZE;   // aio block size, 64KB default
-static uint32_t aio_maxio = AIO_MAXIO;       // number of io submited once, 32 default
-static uint32_t cbk_size = 64*512;           // cache block size, 32KB default
+static uint64_t aio_blksize = AIO_BLKSIZE;   // aio block size, 64KB default
+static uint64_t aio_maxio = AIO_MAXIO;       // number of io submited once, 32 default
+static uint64_t cbk_size = 64*512;           // cache block size, 32KB default
 
-static uint64_t max_dev_lbn = 0; // max lbn on the target devicec
-static uint64_t fsize = 0;       // trace file size
-static uint64_t num = 0;         // num of lbns in trace file
-static uint64_t nr_done = 0;     // number of blocks done
-static uint64_t nr_io = 0;       // number of blocks left to read or write
-static uint64_t max_io = 0;      // max number of io to replay
-static uint64_t dev_size = 0;    // target device size
-static uint64_t busy = 0;        // number of I/O's in flight
-static double disk_size=0.0;     //disk size we need(GB)
+static uint64_t alignment = 512;   // buffer alignment, 512B default
+static uint64_t count_io_q_waits;  // how many time io_queue_wait called
+static uint64_t iocb_free_count;   // current free count
+static uint64_t max_dev_lbn = 0;   // max lbn on the target devicec
+static uint64_t fsize = 0;         // trace file size
+static uint64_t num = 0;           // num of lbns in trace file
+static uint64_t nr_done = 0;       // number of blocks done
+static uint64_t nr_io = 0;         // number of blocks left to read or write
+static uint64_t max_io = 0;        // max number of io to replay
+static uint64_t dev_size = 0;      // target device size
+static uint64_t busy = 0;          // number of I/O's in flight
+static double disk_size=0.0;       // disk size we need(GB)
 
 struct iocb **iocb_free;           // array of pointers to iocb
 struct timeval delay;	           // delay between i/o
-struct timespec rep_start,rep_end; // replay start and end time
-double tc;                         // time consumed
+struct timespec rep_start,rep_end; //replay start and end time
+double tc;                         //time consumed
 
 /* get file size */
 uint64_t get_file_size(const char* filename)
@@ -151,7 +151,10 @@ static void io_error(const char *func, int rc)
     exit(1);
 }
 
-/* Write complete callback, adjust counts and free resources. */
+/*
+ * Write complete callback.
+ * Adjust counts and free resources
+ */
 static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
     if (res2 != 0)
@@ -171,7 +174,10 @@ static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
     free_iocb(iocb);
 }
 
-/* Read complete callback, change read iocb into a write iocb and rep_start it. */
+/*
+ * Read complete callback.
+ * Change read iocb into a write iocb and rep_start it.
+ */
 static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
     /* library needs accessors to look at iocb? */
@@ -201,7 +207,7 @@ static void usage(void)
 }
 
 /* Scale value by kilo, mega, or giga */
-long long scale_by_kmg(long long value, char scale)
+uint64_t scale_by_kmg(uint64_t value, char scale)
 {
     switch (scale)
     {
@@ -266,21 +272,21 @@ int replay_trace(FILE *tracefd)
             while (i < n)
             {
                 // read a lbn from trace file, stop replaying if the end of file is reached
-                if(!fread(&lbn, 4, 1, tracefd))
-                    return 0;
+				if(!fread(&lbn, 4, 1, tracefd))
+					return 0;
                 // lbn need to be smaller than target device size, otherwise we discard it
                 if (lbn > max_dev_lbn)
                 {
-                    if (debug)
-                    {
+					if (debug)
+					{
                         cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i = "<<i<<endl;
-                    }
+					}
                     /*
-                     * we need to ensure the ioq size is equals to n, so if lbn is bigger than max_dev_lbn,
-                     * then we just disgard it and go to next lbn. However, nr_io shoud reduce 1 since we
-                     * are counting the num of io replayed to stop the program when all the lbns in trace
-                     * file have been processed even the time limit is not reached.
-                     */
+					 * we need to ensure the ioq size is equals to n, so if lbn is bigger than max_dev_lbn, 
+					 * then we just disgard it and go to next lbn. However, nr_io shoud reduce 1 since we 
+					 * are counting the num of io replayed to stop the program when all the lbns in trace 
+					 * file have been processed even the time limit is not reached.
+					 */
                     if (nr_io > 0)
                     {
                         nr_io--;
@@ -288,7 +294,7 @@ int replay_trace(FILE *tracefd)
                     }
                     else
                     {
-                        // this means we consumed all the lbns in trace file, so we stop replaying
+						// this means we consumed all the lbns in trace file, so we stop replaying
                         return 0;
                     }
                 }
@@ -301,7 +307,7 @@ int replay_trace(FILE *tracefd)
                     //debug: output origin block according the process of map_bio in dm-cache,
                     //in which one cache block is 64 sectors
                     uint64_t oblock = (uint64_t)offset/cbk_size;
-                    //cout<<"lbn = "<<lbn<<", offset = "<<offset<<", oblock = "<<oblock<<endl;
+                    cout<<"lbn = "<<lbn<<", offset = "<<offset<<", oblock = "<<oblock<<endl;
                 }
                 // prepare io struct and set callbak
                 if (is_write)
@@ -357,25 +363,26 @@ int main(int argc, char *const *argv)
     while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:")) != -1)
     {
         char *endp;
+
         switch (c)
         {
         case 'a':	// alignment of data buffer
             alignment = strtoul(optarg, &endp, 0);
-            alignment = (long)scale_by_kmg((long long)alignment,*endp);
+            alignment = (uint64_t)scale_by_kmg((uint64_t)alignment,*endp);
             break;
         case 'D':   // delay in seconds between 2 ios
             delay.tv_usec = atoi(optarg);
             break;
         case 'b':	// block size
             aio_blksize = strtoul(optarg, &endp, 0);
-            aio_blksize = (uint32_t)scale_by_kmg((long long)aio_blksize, *endp);
+            aio_blksize = (uint64_t)scale_by_kmg((uint64_t)aio_blksize, *endp);
             break;
         case 'n':	// io depth
             aio_maxio = strtoul(optarg, &endp, 0);
             break;
         case 's':	// dev size
             dev_size = strtoul(optarg, &endp, 0);
-            dev_size = (uint64_t)scale_by_kmg((long long)dev_size, *endp);
+            dev_size = (uint64_t)scale_by_kmg((uint64_t)dev_size, *endp);
             break;
         case 't':   // run time of this trace
             run_time = atoi(optarg);
@@ -429,9 +436,9 @@ int main(int argc, char *const *argv)
     }
     trace_name = *argv;
 
-    max_dev_lbn = dev_size/aio_blksize; // max lbn on the target devicec
-    fsize = get_file_size(trace_name);  // trace file size
-    num = fsize/4-1;                    // num of lbns in trace file
+    max_dev_lbn = dev_size/aio_blksize; //max lbn on the target devicec
+    fsize = get_file_size(trace_name);  //trace file size
+    num = fsize/4-1;                    //num of lbns in trace file
 
     // open the trace file
     tracefd = fopen(trace_name, "rb");
@@ -455,24 +462,24 @@ int main(int argc, char *const *argv)
     for (int ir=0; ir<round; ir++)
     {
         replay_trace(tracefd);
-        if (debug)
-            cout <<"replay round "<<ir+1<<" ... done!"<<endl;
+		if (debug)
+		    cout <<"replay round "<<ir+1<<" ... done!"<<endl;
     }
     // end timing and get the time consumed by this trace replaying
     clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
     tc = rep_end.tv_sec - rep_start.tv_sec + (rep_end.tv_nsec - rep_start.tv_nsec)/1000000000.0;
 
     // compute the IOPS and throughput(MB/s)
-    uint64_t ios = nr_done;                     // the number of ios actually done
-    uint64_t data_size=ios*aio_blksize;         // io data size
-    uint64_t iops = ios/tc;                     // IOPS
-    double bw = 1.0*data_size/tc/1024/1024;     // MB/s
+    uint64_t ios = nr_done;                     //the number of ios actually done
+    uint64_t data_size=ios*aio_blksize;         //io data size
+    uint64_t iops = ios/tc;                     //IOPS
+    double bw = 1.0*data_size/tc/1024/1024;     //MB/s
 
-    // out format: trace_name, device, data_size(GB), time_elapse(s), iops, bw(MB/s)
+    //out format: trace_name, device, data_size(GB), time_elapse(s), iops, bw(MB/s)
     cout<<trace_name<<", "<<dev_name<<", IO data size(GB)="<<1.0*data_size/1024/1024/1024
         <<", time(s)="<<tc<<", iops="<<iops<<", BW(MB/s)="<<bw<<endl;
 
-    // close files
+    //close files
     if (devfd != -1)
         close(devfd);
     fclose(tracefd);
