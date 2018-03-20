@@ -151,10 +151,7 @@ static void io_error(const char *func, int rc)
     exit(1);
 }
 
-/*
- * Write complete callback.
- * Adjust counts and free resources
- */
+/* Write complete callback, adjust counts and free resources. */
 static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
     if (res2 != 0)
@@ -174,10 +171,7 @@ static void wr_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
     free_iocb(iocb);
 }
 
-/*
- * Read complete callback.
- * Change read iocb into a write iocb and rep_start it.
- */
+/* Read complete callback, change read iocb into a write iocb and rep_start it. */
 static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
     /* library needs accessors to look at iocb? */
@@ -266,10 +260,10 @@ int replay_trace(FILE *tracefd)
         int n = MIN(MIN(aio_maxio - busy, aio_maxio),nr_io);
         if (n > 0)
         {
-            // io callback array
-            struct iocb *ioq[n];
-            uint32_t i = 0;
-            while (i < n)
+            struct iocb *ioq[n];  // io callback array
+            uint32_t qindex = 0;  // io index in queue
+			// we will put n ios in a queue
+            while (qindex < n)
             {
                 // read a lbn from trace file, stop replaying if the end of file is reached
 				if(!fread(&lbn, 4, 1, tracefd))
@@ -279,7 +273,7 @@ int replay_trace(FILE *tracefd)
                 {
 					if (debug)
 					{
-                        cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", i = "<<i<<endl;
+                        cout<<"lbn:"<<lbn<<" > max_dev_lbn:"<<max_dev_lbn<<", nr_io = "<<nr_io<<",n ="<<n<<", qindex = "<<qindex<<endl;
 					}
                     /*
 					 * we need to ensure the ioq size is equals to n, so if lbn is bigger than max_dev_lbn, 
@@ -321,9 +315,9 @@ int replay_trace(FILE *tracefd)
                     io_set_callback(io, rd_done);
                 }
                 // put this io in queue
-                ioq[i] = io;
+                ioq[qindex] = io;
                 // move to the next io
-                i++;
+                qindex++;
             }
 
             // submit n ios one time
@@ -340,6 +334,7 @@ int replay_trace(FILE *tracefd)
             }
         }
 
+		// increase number of ios waiting in queue 
         count_io_q_waits++;
         // wait at least one io to be completed
         rc = io_wait_run(myctx, 0);
@@ -349,13 +344,11 @@ int replay_trace(FILE *tracefd)
     return 0;
 }
 
-
 int main(int argc, char *const *argv)
 {
     int c;
     struct stat st;
     off_t length = 0, offset = 0;
-
     extern char *optarg;
     extern int optind;
 
@@ -363,7 +356,6 @@ int main(int argc, char *const *argv)
     while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:")) != -1)
     {
         char *endp;
-
         switch (c)
         {
         case 'a':	// alignment of data buffer
