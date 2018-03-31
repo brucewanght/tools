@@ -1,6 +1,10 @@
 #!/bin/bash
 
 if [ "$1" == "-i" ];then 
+	if [ "$2" == "" ];then 
+		echo "please input lightnvm device, e.g., nvme1n1"
+		exit 1
+	fi
 	dev_live=$(ls /dev/ |grep cachedev)
 	if [ "$dev_live" == "" ];then
 		echo "create cachedev with pblk"
@@ -12,20 +16,26 @@ if [ "$1" == "-i" ];then
 			if [ $? != 0 ];then
 				exit 1
 			fi
+			echo "create cachedev$i ... OK"
 	    done
 	else 
 		echo "already has cachedev"
 	fi 
 elif [ "$1" == "-f" ];then 
+	if [ "$2" == "" ];then 
+		echo "please input lightnvm device, e.g., nvme1n1"
+		exit 1
+	fi
 	dev_live=$(ls /dev/ |grep cachedev)
 	if [ "$dev_live" != "" ];then
-		echo "create cachedev with pblk"
+		echo "remove pblk dev"
 		for i in $(seq 0 15)
 		do
 			nvme lnvm remove $2 -n cachedev$i
 			if [ $? != 0 ];then
 				exit 1
 			fi
+			echo "remove cachedev$i ... OK"
 	    done
 	else 
 		echo "no cachedev"

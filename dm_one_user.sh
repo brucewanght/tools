@@ -26,10 +26,15 @@ if [ "$1" = "-i" ];then
 		exit 1
 	fi
 
+	if [ "$7" = "" ];then 
+		echo "please input cache device base name, e.g., cachedev"
+		exit 1
+	fi
+
 	echo "set meta device"
 
-	dd if=/dev/zero of=/tmp/meta.img bs=1M count=2048
-	losetup /dev/loop$2 /tmp/meta.img 
+	dd if=/dev/zero of=/tmp/meta$2.img bs=1M count=2048
+	losetup /dev/loop$2 /tmp/meta$2.img 
 
 	#cache block size is 32K
     sectors=$(blockdev --getsz /dev/sdd)	
@@ -37,7 +42,7 @@ if [ "$1" = "-i" ];then
     cbks=$(awk 'BEGIN{print '$5'*1024*1024/32}')
 
 	echo "set up dm-cache device"
-	dmsetup create my_cache$2 --table '0 '$sectors' cache '$2' '$3' '/dev/loop$2' /dev/cachedev '$6' 64 '$offs' '$cbks' 1 writeback lru 0'
+	dmsetup create my_cache$2 --table '0 '$sectors' cache '$2' '$3' '/dev/loop$2' '$7' '$6' 64 '$offs' '$cbks' 1 writeback default 0'
 	if [ $? != 0 ];then
 		echo "set up dm-cache failed!"
 		losetup -d /dev/loop$2
@@ -63,4 +68,3 @@ else
   echo "free dm-cache: ./dm_one_user.sh -f id"
   exit 1
 fi
-
