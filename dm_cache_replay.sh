@@ -68,9 +68,10 @@ fi
 
 sectors=$(blockdev --getsz /dev/sdd)
 size=(1 2 4 10 50 100 200 400 800)
-mrcf="$trace"_"$policy"_"$ch".mrc
-perf="$trace"_"$policy"_"$ch".perf
-echo "mrc file $mrcf, perf file $perf"
+#mrcf="$trace"_"$policy"_"$ch".mrc
+#perf="$trace"_"$policy"_"$ch".perf
+mrcf="$trace"_"$policy".mrc
+#echo "mrc file $mrcf, perf file $perf"
 
 #collect interval is 10s, and count is time/interval
 int=10
@@ -80,9 +81,10 @@ for size in ${size[@]}
 do
 	echo "test cache size: $size"
 	./dm_one_user.sh -i 0 1 0 $size /dev/sdd /dev/nvme0n
-	nohup collectl -sDcm -i $int -c $cnt >"$perf"_"$size"& 
+	#nohup collectl -sDcm -i $int -c $cnt >"$perf"_"$size"& 
 	#-w means writing data 
-	./replay -a 4K -b 4K -n 128 -s 900G -t $tm /dev/mapper/my_cache0 $trace_file >>$perf 
+	#./replay -a 4K -b 4K -n 128 -s 900G -t $tm /dev/mapper/my_cache0 $trace_file >>$perf 
+	./replay -a 4K -b 4K -n 128 -s 900G -t $tm /dev/mapper/my_cache0 $trace_file
 	sleep 10
 	./miss_ratio.sh 0 $mrcf
 	./dm_one_user.sh -f 0

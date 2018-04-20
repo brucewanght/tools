@@ -13,18 +13,20 @@ using namespace std;
 
 int main(int argc, char** argv)
 {
-    if (argc < 4)
+    if (argc < 5)
     {
         cout <<"example: trace_gen trace_name data_size type:"<<endl;
-        cout <<"trace_name: your trace name, e.g., trace1"<<endl;
-        cout <<" data_size: your trace data size in GB, e.g., 4"<<endl;
-        cout <<"      type: random or sequential, sequential by default"<<endl;
+        cout <<" trace_name: your trace name, e.g., trace1"<<endl;
+        cout <<"circle_size: your trace data size for every circle in GB, e.g., 4"<<endl;
+        cout <<"       type: ran(random) or seq(sequential), seq by default"<<endl;
+        cout <<"     circle: num of circles"<<endl;
         exit(1);
     }
 
     //time record
 	struct timespec start,end;
     double tc;                        //time consumed
+    uint32_t circle=0;
 
 	default_random_engine random(time(NULL));
 
@@ -36,11 +38,12 @@ int main(int argc, char** argv)
 	uniform_int_distribution<uint64_t> random_uint(0, nr_blocks);
 
 	int seq = 1;
-	if (argv[3] == "random")
+	if ((argv[3] == "random") || (argv[3] == "ran"))
 		seq = 0;
 	else
 		seq = 1;
 
+    circle = atoi(argv[4]);
     uint64_t lbn=0;
     uint64_t count=0;
     uint64_t max_lbn=0;
@@ -49,22 +52,26 @@ int main(int argc, char** argv)
 	ofstream fout;
 	fout.open(trace_name, std::ios::binary);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &start);//begin timing
-	for(count=0; count<=nr_blocks; count++)
+	for (int i=0; i<circle; i++)
 	{
-		fout.write((char *)(&lbn),4);
-		cout <<lbn<<endl;
-		if(lbn > max_lbn)
-			max_lbn = lbn;
-		if(seq)
-			lbn++;
-		else 
-			lbn = random_uint(random);
+		lbn=0;
+		for(count=0; count<=nr_blocks; count++)
+		{
+			fout.write((char *)(&lbn),4);
+			cout <<lbn<<endl;
+			if(lbn > max_lbn)
+				max_lbn = lbn;
+			if(seq)
+				lbn++;
+			else 
+				lbn = random_uint(random);
+		}
 	}
 	max_lbn ++;
 	fout.write((char *)(&max_lbn),4);
 
 	double disk_size = blk_size*max_lbn/1024/1024/1024; //disk size in GB
-	double data_size = blk_size*nr_blocks/1024/1024/1024; //data size in GB
+	double data_size = circle*blk_size*nr_blocks/1024/1024/1024; //data size in GB
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &end);//end timing
     tc = end.tv_sec - start.tv_sec + (end.tv_nsec - start.tv_nsec)/1000000000.0;

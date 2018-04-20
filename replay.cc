@@ -43,9 +43,10 @@ static int devfd;             // device fd
 static FILE* tracefd;         // trace fd
 static int debug = 0;         // debug option, 1 for debug
 static int is_write = 0;      // is write or not, read default
-static uint32_t run_time = 0; // run time of replay, 0 means no timeout
-static uint32_t round = 1;    // how many rounds to replay the trace
-static uint32_t max_lbn=0;    // max lbn number from trace
+static uint32_t run_time = 0;   // run time of replay, 0 means no timeout
+static uint32_t burst_time = 0; // time interval to burst IO
+static uint32_t round = 1;      // how many rounds to replay the trace
+static uint32_t max_lbn=0;      // max lbn number from trace
 
 static uint64_t aio_blksize = AIO_BLKSIZE;   // aio block size, 64KB default
 static uint64_t aio_maxio = AIO_MAXIO;       // number of io submited once, 32 default
@@ -67,6 +68,7 @@ static double disk_size=0.0;       // disk size we need(GB)
 struct iocb **iocb_free;           // array of pointers to iocb
 struct timeval delay;	           // delay between i/o
 struct timespec rep_start,rep_end; //replay start and end time
+struct timespec rep_last;          //last submit time
 double tc;                         //time consumed
 
 /* get file size */
@@ -232,6 +234,11 @@ int replay_trace(FILE *tracefd)
     off_t offset = 0; // io offset on the target device
     nr_io = num;      // number of lbns left to replay
 
+	if (debug)
+	{
+		cout<<"delay time = "<<delay.tv_usec<<"us"<<endl;
+		cout<<"burst time = "<<burst_time<<"s"<<endl;
+	}
     /* initialize io state machine */
     io_context_t myctx;
     memset(&myctx, 0, sizeof(myctx));
@@ -249,6 +256,7 @@ int replay_trace(FILE *tracefd)
     {
         // check if the runtime is reached, stop replaying if so
         clock_gettime(CLOCK_MONOTONIC_RAW, &rep_end);
+
         if (run_time && ((rep_end.tv_sec - rep_start.tv_sec) >= run_time))
             return 0;
 
@@ -326,12 +334,30 @@ int replay_trace(FILE *tracefd)
                 io_error("io_submit", rc);
             busy += n;
 
-            // delay a few seconds between ios if the delay is set
-            if (delay.tv_usec)
-            {
-                struct timeval t = delay;
-                (void)select(0, 0, 0, 0, &t);
-            }
+			// if have set burst_time, we submit delayed IOs for burst_time seconds,
+			// then we submit brust IOs in another specified time interval
+			if ((burst_time == 0) || ((rep_end.tv_sec - rep_last.tv_sec) < burst_time))
+			{
+				// delay a few seconds between ios if the delay is set
+                if (delay.tv_usec)
+                {
+                    struct timeval t = delay;
+			    	/* Select is originally used to monitor status change of files, 
+			    	 * but here we can use it to delay some time that is smaller than
+			    	 * 1 second.
+			    	 * See man 2 select for more information.
+			    	 */
+                    (void)select(0, 0, 0, 0, &t);
+                }
+			}
+
+			// if has passed specified seconds since last submit of delayed IOs, we
+			// reset the timer to submit delayed IOs again
+			// here we set the burst for 0.5 brust_time
+			if(rep_end.tv_sec - rep_last.tv_sec > 2*burst_time)
+			{
+				rep_last.tv_sec = rep_end.tv_sec;
+			}
         }
 
 		// increase number of ios waiting in queue 
@@ -353,7 +379,7 @@ int main(int argc, char *const *argv)
     extern int optind;
 
     // parse the command arguments
-    while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:")) != -1)
+    while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:I:")) != -1)
     {
         char *endp;
         switch (c)
@@ -362,7 +388,7 @@ int main(int argc, char *const *argv)
             alignment = strtoul(optarg, &endp, 0);
             alignment = (uint64_t)scale_by_kmg((uint64_t)alignment,*endp);
             break;
-        case 'D':   // delay in seconds between 2 ios
+        case 'D':   // delay in micro seconds between 2 ios
             delay.tv_usec = atoi(optarg);
             break;
         case 'b':	// block size
@@ -376,8 +402,11 @@ int main(int argc, char *const *argv)
             dev_size = strtoul(optarg, &endp, 0);
             dev_size = (uint64_t)scale_by_kmg((uint64_t)dev_size, *endp);
             break;
-        case 't':   // run time of this trace
+        case 't':   // run time (seconds) of this trace
             run_time = atoi(optarg);
+            break;
+        case 'I':   // time interval (seconds) to burst IO
+            burst_time = atoi(optarg);
             break;
         case 'r':   // how many rounds
             round = atoi(optarg);
