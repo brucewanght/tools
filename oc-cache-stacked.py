@@ -35,22 +35,45 @@ defhatchs = ['-', '+', 'x', '\\', '*', 'o', '.']
 
 '''
 autoread: read data form  file to list 
-filename: collectl log file name
+logs: collectl log file names
 blkname: block names we care about
 '''
-def autoread(filename, blknames):
-    with open(filename, 'r') as f:
-        data = f.readlines()
-    perfs=[[] for i in range(len(blknames))]
-    for line in data:
-        line.strip()            #remove multiple blank spaces between numbers
-        nums = line.split()     #split data with blank space 
-        for i in range(0,len(blknames)):
-            if line.startswith(blknames[i]):
-                #the 2nd and 6th number is read and write throughput in KB/s
-                throughput = (float(nums[1])+float(nums[6]))/1000  
-                perfs[i].append(throughput)
-    return perfs
+def get_avg_perf(logs, blknames):
+    result=[]
+    #open a csv file, the newline parameter is used to get rid of empty lines   
+    csvfile_out = open('average-throughput.csv','w',newline='')
+    f_csv = csv.writer(csvfile_out)
+
+    for log in logs:
+        #open log file and read all the strings to data
+        with open(log, 'r') as f:
+            data = f.readlines()
+
+        perfs=[[] for i in range(len(blknames))]
+        avg_perfs =[ 0 for i in range(len(blknames))]
+
+
+        #we get those specified performance numbers and store them in list perfs
+        for line in data:
+            line.strip()  # remove multiple blank spaces between numbers
+            nums = line.split()  # split data with blank space
+            for i in range(0, len(blknames)):
+                if line.startswith(blknames[i]):
+                    #the 2nd and 6th number is read and write throughput in KB/s
+                    throughput = (float(nums[1])+float(nums[6]))/1000
+                    perfs[i].append(throughput)
+
+        #get average performance data
+        for i in range(0, len(perfs)):
+            avg_perfs[i] = sum(perfs[i])/len(perfs[i])
+        
+        #store average performance list to result list
+        result.append(avg_perfs)
+
+    #write average performance data to csv file
+    f_csv.writerows(result)
+    csvfile_out.close()
+    return result
 
 '''
 plotdata: plot data to line chart
@@ -59,39 +82,37 @@ xname: x-axis name
 yname: y-axis name
 kwargs: some other parameters
 '''
-def plotline(log, blknames, xname, yname, **kwargs):
-    styles = kwargs.get('styles', deflinestyle)
+def plotbar(avg_perfs, blknames, xname, yname, **kwargs):
     #plt.style.use('seaborn-whitegrid')
-    plt.figure(dpi=300, figsize=(10, 8))
-    perfs = autoread(log, blknames)             #get performance data for blknames
+    hatchs = kwargs.get('hatchs', defhatchs)
+    labels = ['tenant-0','tenant-1','tenant-2','tenant-3']
+    xlabels = ['Shared-Cache','OC-Cache']
 
-    agg_perf=[0]*len(perfs[0])                  #aggregated performance of all tenants
-    time=[t*10 for t in range(0,len(perfs[0]))] #time interval is 10 seconds
+    fig, ax = plt.subplots(figsize=(8,6))
 
-    for i in range(0,len(perfs)):
-        lname='tenant-'+str(i)
-        ls=styles[i]
-        perf=perfs[i]
-        plt.plot(time, perf, ls, label=lname, linewidth=2.0)
-        for j in range(0,len(perf)):
-            agg_perf[j]=agg_perf[j]+perf[j]
+    t0 = [avg_perfs[0][0], avg_perfs[1][0]]
+    t1 = [avg_perfs[0][1], avg_perfs[1][1]]
+    t2 = [avg_perfs[0][2], avg_perfs[1][2]]
+    t3 = [avg_perfs[0][3], avg_perfs[1][3]]
 
-    plt.ylim(0,1000)
-    plt.xlim(0,1600)
-    plt.plot(time, agg_perf,'-^', label='Aggregated', linewidth=2.0)
+    bar_width = 0.5
+    bottom2 = [i+j for i,j in zip(t0, t1)]
+    bottom3 = [i+j for i,j in zip(bottom2, t2)]
 
-    plt.grid()
+    ax.bar(xlabels, t0, alpha=0.5, width=bar_width, hatch=hatchs[0], label=labels[0])
+    ax.bar(xlabels, t1, bottom=t0, alpha=0.5, width=bar_width, hatch=hatchs[1], label=labels[1])
+    ax.bar(xlabels, t2, bottom=bottom2, alpha=0.5, width=bar_width, hatch=hatchs[2], label=labels[2])
+    ax.bar(xlabels, t3, bottom=bottom3, alpha=0.5, width=bar_width, hatch=hatchs[3], label=labels[3])
+
+    #set the location of xticks and xlabels
     plt.xticks(fontsize=20)
     plt.yticks(fontsize=20)
-
-    plt.xlabel(xname, fontsize=20)
+    plt.legend(loc='upper center',ncol=2,fancybox=True,shadow=True, prop = {'size':18})
     plt.ylabel(yname, fontsize=20)
-    #plt.legend()
-    plt.legend(loc='center right',ncol=1,fancybox=True,shadow=True,prop = {'size':16})
-
-    pname = log.split(".")[0]
-    plt.savefig(pname+".pdf", bbox_inches='tight')  # save figure as fname
+    plt.ylim(0,1000)
+    plt.grid()
     plt.show()  # show the figure
+    fig.savefig("average-throughput-stacked.pdf", bbox_inches='tight')  # save figure as fname
     plt.close()
 
 
@@ -101,6 +122,7 @@ main function: scan the files in current directory, find log files and plot thei
 if __name__ == "__main__":
     filenames = os.listdir(os.getcwd())  # get file names in current directory
     bw_logs = []
+    avg_perfs = []
     blknames = ['dm-0','dm-1','dm-2','dm-3']
 
     for fn in filenames:
@@ -108,5 +130,5 @@ if __name__ == "__main__":
             bw_logs.append(fn)
             print(fn)
 
-    for log in bw_logs:
-        plotline(log, blknames, "time(s)","Throughput(MB/s)")
+    avg_perfs = get_avg_perf(bw_logs, blknames)
+    plotbar(avg_perfs, blknames, "tenant","Throughput(MB/s)")
