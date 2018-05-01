@@ -59,10 +59,8 @@ xname: x-axis name
 yname: y-axis name
 kwargs: some other parameters
 '''
-def plotline(log, blknames, xname, yname, **kwargs):
+def plotline(log, blknames, sub, **kwargs):
     styles = kwargs.get('styles', deflinestyle)
-    #plt.style.use('seaborn-whitegrid')
-    plt.figure(dpi=300, figsize=(10, 8))
     perfs = autoread(log, blknames)             #get performance data for blknames
 
     agg_perf=[0]*len(perfs[0])                  #aggregate performance of all tenants
@@ -72,28 +70,12 @@ def plotline(log, blknames, xname, yname, **kwargs):
         lname='tenant-'+str(i)
         ls=styles[i]
         perf=perfs[i]
-        plt.plot(time, perf, ls, label=lname, linewidth=2.0)
+        sub.plot(time, perf, ls, label=lname, linewidth=2.0)
         for j in range(0,len(perf)):
             agg_perf[j]=agg_perf[j]+perf[j]
 
-    plt.ylim(0,1000)
-    plt.xlim(0,800)
-    plt.plot(time, agg_perf,'-^', label='Aggregate', linewidth=2.0)
-
-    plt.grid()
-    plt.xticks(fontsize=20)
-    plt.yticks(fontsize=20)
-
-    plt.xlabel(xname, fontsize=20)
-    plt.ylabel(yname, fontsize=20)
-    #plt.legend()
-    plt.legend(loc='center right',ncol=1,fancybox=True,shadow=True,prop = {'size':16})
-
-    pname = log.split(".")[0]
-    plt.savefig(pname+".pdf", bbox_inches='tight')  # save figure as pdf file, and make it tight
-    plt.show()  # show the figure
-    plt.close()
-
+    sub.plot(time, agg_perf,'-^', label='Aggregate', linewidth=2.0)
+    sub.grid()
 
 '''
 main function: scan the files in current directory, find log files and plot their data
@@ -102,11 +84,33 @@ if __name__ == "__main__":
     filenames = os.listdir(os.getcwd())  # get file names in current directory
     bw_logs = []
     blknames = ['dm-0','dm-1','dm-2','dm-3']
+    titles = ['OC-Cache','Shared-Cache']
 
+    #get names of performance files
     for fn in filenames:
         if fn.endswith(".perf"):
             bw_logs.append(fn)
             print(fn)
 
+    #create a figure that has 2 sub-figures in one row, and they share x-axis and y-axis
+    fig, axes = plt.subplots(nrows=1, ncols=2,sharex=True, sharey=True,figsize=(14,6))
+    i=0
+    #draw every sub-figures
     for log in bw_logs:
-        plotline(log, blknames, "time(s)","Throughput(MB/s)")
+        plotline(log, blknames, axes[i])
+        axes[i].set_title(titles[i], size=20)
+        i = i+1
+    #set titile for every sub-figures, and set tick size to 20
+    for ax, col in zip(axes, ['OC-Cache','Shared-Cache']):
+        ax.set_title(col, size=20)
+        ax.tick_params(labelsize=20)  
+
+    axes[0].legend(loc='center left',ncol=2,prop = {'size':20})
+    plt.ylim(0,1000)
+    plt.xlim(0,800)
+    #set ylabel and xlabel shared by these 2 sub-figures
+    fig.text(-0.01, 0.5, 'Throughput (MB/s)', ha='center', va='center', rotation='vertical', size=20)
+    fig.text(0.5, -0.02, 'Time (seconds)', ha='center', va='center', size=20)
+    fig.tight_layout()
+    #plt.show()
+    fig.savefig("throughput-3r1w.pdf", bbox_inches='tight')  # save figure as pdf file, and make it tight

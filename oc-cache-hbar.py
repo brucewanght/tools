@@ -1,0 +1,138 @@
+#coding=utf-8
+"""
+========
+Note:
+1.This is for "collectl -sD" command output log
+2.Example data as follow: 
+========
+# DISK STATISTICS (/sec)
+#          <---------reads---------------><---------writes--------------><--------averages--------> Pct
+#Name       KBytes Merged  IOs Size  Wait  KBytes Merged  IOs Size  Wait  RWSize  QLen  Wait SvcTim Util
+sda            102      0    1  128     0       8      1    0   20     0      92     0     0      0    0
+sdb              0      0    0    0     0       0      0    0    0     0       0     0     0      0    0
+sdc          26404   2858  611   43    54       0      0    0    0     0      43    34    54      1   96
+nvme1n1          0      0    0    0     0       0      0    0    0     0       0     0     0      0    0
+sdd          19870    979 2055   10    34       0      0    0    0     0       9    72    34      0   98
+sde          13556    802  676   20    27       0      0    0    0     0      20    21    27      1   86
+sdf          19172    842  792   24    89       0      0    0    0     0      24    71    89      1   99
+nvme0n1          0      0    0    0     0       0      0    0    0     0       0     0     0      0    0
+nvme2n1          0      0    0    0     0       0      0    0    0     0       0     0     0      0    0
+dm-0         97005      0  24K    4     4       0      0    0    0     0       4   115     4      0   99
+dm-1         87211      0  21K    4     5       0      0    0    0     0       4   116     5      0   99
+dm-2        251608      0  62K    4     1       0      0    0    0     0       4    92     1      0   99
+dm-3          5476      0 1369    4    92       0      0    0    0     0       4   127    92      0   99
+"""
+import csv
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+#              red       orange     green       blue        pink     brown      purple
+defcolors = ['#d62728', '#ff7f0e', '#2ca02c', '#1f77b4', '#e377c2', '#8c564b', '#9467bd']
+deflinestyle = ['-o','-v','-s','-p','-^','-+']
+defhatchs = ['.','+', 'x', '\\', '*', 'o','-']
+
+'''
+autoread: read data form  file to list 
+logs: collectl log file names
+blkname: block names we care about
+'''
+def get_avg_perf(logs, blknames):
+    result=[]
+    #open a csv file, the newline parameter is used to get rid of empty lines   
+    csvfile_out = open('average-throughput.csv','w',newline='')
+    f_csv = csv.writer(csvfile_out)
+
+    for log in logs:
+        #open log file and read all the strings to data
+        with open(log, 'r') as f:
+            data = f.readlines()
+
+        perfs=[[] for i in range(len(blknames))]
+        avg_perfs =[ 0 for i in range(len(blknames))]
+
+
+        #we get those specified performance numbers and store them in list perfs
+        for line in data:
+            line.strip()  # remove multiple blank spaces between numbers
+            nums = line.split()  # split data with blank space
+            for i in range(0, len(blknames)):
+                if line.startswith(blknames[i]):
+                    #the 2nd and 6th number is read and write throughput in KB/s
+                    throughput = (float(nums[1])+float(nums[6]))/1000
+                    perfs[i].append(throughput)
+
+        #get average performance data
+        for i in range(0, len(perfs)):
+            avg_perfs[i] = sum(perfs[i])/len(perfs[i])
+        
+        #store average performance list to result list
+        result.append(avg_perfs)
+
+    #write average performance data to csv file
+    f_csv.writerows(result)
+    csvfile_out.close()
+    return result
+
+'''
+plotdata: plot data to line chart
+logs: data log names
+xname: x-axis name
+yname: y-axis name
+kwargs: some other parameters
+'''
+def plotbar(avg_perfs, blknames, xname, yname, **kwargs):
+    #plt.style.use('seaborn-whitegrid')
+    hatchs = kwargs.get('hatchs', defhatchs)
+    labels = ['tenant-0','tenant-1','tenant-2','tenant-3']
+    barlabels = ['Shared-Cache','OC-Cache']
+
+    fig, ax = plt.subplots(figsize=(10,2.5))
+
+    t0 = [avg_perfs[0][0], avg_perfs[1][0]]
+    t1 = [avg_perfs[0][1], avg_perfs[1][1]]
+    t2 = [avg_perfs[0][2], avg_perfs[1][2]]
+    t3 = [avg_perfs[0][3], avg_perfs[1][3]]
+
+    bar_height = 0.3
+    bottom2 = [i+j for i,j in zip(t0, t1)]
+    bottom3 = [i+j for i,j in zip(bottom2, t2)]
+
+    ax.barh(barlabels, t0, alpha=0.5, height=bar_height, hatch=hatchs[0], label=labels[0], align='center')
+    ax.barh(barlabels, t1, left=t0, alpha=0.5, height=bar_height, hatch=hatchs[1], label=labels[1], align='center')
+    ax.barh(barlabels, t2, left=bottom2, alpha=0.5, height=bar_height, hatch=hatchs[2], label=labels[2], align='center')
+    ax.barh(barlabels, t3, left=bottom3, alpha=0.5, height=bar_height, hatch=hatchs[3], label=labels[3], align='center')
+
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width, box.width* 0.8])
+    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1,fancybox=True, shadow=True, prop = {'size':20})
+
+    #set the location of xticks and xlabels
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    #plt.legend(loc='center right',ncol=1,fancybox=True, shadow=True, prop = {'size':20})
+    plt.xlabel(yname, fontsize=20)
+    plt.xlim(0,800)
+    plt.grid()
+    plt.show()  # show the figure
+    fig.savefig("average-throughput-stacked.pdf", bbox_inches='tight')  # save figure as fname
+    plt.close()
+
+
+'''
+main function: scan the files in current directory, find log files and plot their data
+'''
+if __name__ == "__main__":
+    filenames = os.listdir(os.getcwd())  # get file names in current directory
+    bw_logs = []
+    avg_perfs = []
+    blknames = ['dm-0','dm-1','dm-2','dm-3']
+
+    for fn in filenames:
+        if fn.endswith(".perf"):
+            bw_logs.append(fn)
+            print(fn)
+
+    avg_perfs = get_avg_perf(bw_logs, blknames)
+    plotbar(avg_perfs, blknames, "tenant","Throughput(MB/s)")
