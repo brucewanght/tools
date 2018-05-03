@@ -81,7 +81,10 @@ def plotline(log, blknames, sub, **kwargs):
 main function: scan the files in current directory, find log files and plot their data
 '''
 if __name__ == "__main__":
-    filenames = os.listdir(os.getcwd())  # get file names in current directory
+    cwd = os.getcwd()            # get current wording directory
+    filenames = os.listdir(cwd)  # get file names in current directory
+    figname = cwd.split('_')[-1] # get the last string splited by "-"
+
     bw_logs = []
     blknames = ['dm-0','dm-1','dm-2','dm-3']
     titles = ['OC-Cache','Shared-Cache']
@@ -106,11 +109,11 @@ if __name__ == "__main__":
         ax.tick_params(labelsize=20)  
 
     axes[0].legend(loc='center left',ncol=2,prop = {'size':20})
-    plt.ylim(0,1000)
-    plt.xlim(0,800)
+    #plt.ylim(0,1000)
+    plt.xlim(0,1600)
     #set ylabel and xlabel shared by these 2 sub-figures
     fig.text(-0.01, 0.5, 'Throughput (MB/s)', ha='center', va='center', rotation='vertical', size=20)
     fig.text(0.5, -0.02, 'Time (seconds)', ha='center', va='center', size=20)
     fig.tight_layout()
     #plt.show()
-    fig.savefig("throughput-3r1w.pdf", bbox_inches='tight')  # save figure as pdf file, and make it tight
+    fig.savefig("throughput-"+figname+".pdf", bbox_inches='tight')  # save figure as pdf file, and make it tight
