@@ -13,7 +13,8 @@ if [ "$1" == "-r1" ];then
       exit 1
     fi
 	echo "replay for channel isolation dm-cache users ..."
-	for dm in $(cat dm_isolation.conf)
+	c_name=$(grep cache dm_isolation.conf)
+	for dm in $(grep dev dm_isolation.conf)
 	do 
 		#format in replay_all.conf
 		#uid,cid,off(GB),size(GB),odev,trace_file
@@ -25,24 +26,35 @@ if [ "$1" == "-r1" ];then
 		trace_file=$(echo $dm |cut -d"," -f6)
 		delay_us=$(echo $dm |cut -d"," -f7)
 		burst_s=$(echo $dm |cut -d"," -f8)
+		wratio=$(echo $dm |cut -d"," -f9)
 
-		#create this user
-		./dm_one_user.sh -i $uid $cid $off $size $odev
-		if [ $? != 0 ];then
-			exit 1
-		fi
-		echo "create user $uid ... done!"
+        live=$(ls /dev/mapper/ |grep my_cache$uid) 
+        if [ "$live" != "" ];then
+        	echo "my_cache$uid already exists!"
+		else
+		    #create this user
+		    ./dm_one_user.sh -i $uid $cid $off $size $odev
+		    if [ $? != 0 ];then
+		    	exit 1
+		    fi
+			echo "my_cache$uid ... done!"
+        fi
 		#replay trace_file file for user 
-		nohup ./replay -a 4K -b 4K -n 128 -s 900G -t 1000 -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		if [ "$wratio" != "0" ];then
+			nohup ./replay -a 4K -b 4K -n 128 -s 900G -r 5 -t 1800 -w $wratio -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		else
+			nohup ./replay -a 4K -b 4K -n 128 -s 900G -r 5 -t 1800 -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		fi
 	done
-	nohup collectl -sDcm -i 5 -c 200 >4_users_replay.perf& 
+	nohup collectl -sDcm -i 5 -c 360 >$c_name-throughput.perf& 
 elif [ "$1" == "-r2" ];then 
     if [ ! -f "dm_hotcold.conf" ];then
       echo "ERROR:please edit the dm_hotcold.conf file!"
       exit 1
     fi
 	echo "replay for hot/cold channel isolation dm-cache users ..."
-	for dm in $(cat dm_hotcold.conf)
+	c_name=$(grep cache dm_hotcold.conf)
+	for dm in $(grep dev dm_hotcold.conf)
 	do 
 		#format in replay_all.conf
 		#uid,hid,cid,hoff(GB),hsize(GB),coff,csize,odev,trace_file
@@ -57,20 +69,29 @@ elif [ "$1" == "-r2" ];then
 		trace_file=$(echo $dm |cut -d"," -f9)
 		delay_us=$(echo $dm |cut -d"," -f10)
 		burst_s=$(echo $dm |cut -d"," -f11)
+		wratio=$(echo $dm |cut -d"," -f12)
 
-		#create this user
-		./dm_one_user_hotcold.sh -i $uid $hid $cid $hoff $hsize $coff $csize $odev
-		if [ $? != 0 ];then
-			exit 1
-		fi
-		echo "create user $uid ... done!"
+        live=$(ls /dev/mapper/ |grep my_cache$uid) 
+        if [ "$live" != "" ];then
+        	echo "my_cache$uid already exists!"
+		else
+		    #create this user
+			./dm_one_user_hotcold.sh -i $uid $hid $cid $hoff $hsize $coff $csize $odev
+		    if [ $? != 0 ];then
+		    	exit 1
+		    fi
+			echo "my_cache$uid ... done!"
+        fi
 		#replay trace_file file for user 
-		#nohup ./replay -a 4K -b 4K -n 128 -s 900G -t 800 -D 5000 /dev/mapper/my_cache$uid $trace_file >"$uid"_replay.perf&
-		nohup ./replay -a 4K -b 4K -n 128 -s 900G -t 1000 -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		if [ "$wratio" != "0" ];then
+			nohup ./replay -a 4K -b 4K -n 128 -s 900G -t 1800 -w $wratio -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		else
+			nohup ./replay -a 4K -b 4K -n 128 -s 900G -t 1800 -D $delay_us -I $burst_s /dev/mapper/my_cache$uid $trace_file&
+		fi
 	done
-	nohup collectl -sDcm -i 10 -c 160 >4_users_hotcold.perf& 
+	nohup collectl -sDcm -i 5 -c 360 >$c_name-throughput.perf& 
 elif [ "$1" == "-f1" ];then 
-	for dm in $(cat dm_isolation.conf)
+	for dm in $(grep dev dm_isolation.conf)
 	do 
 		uid=$(echo $dm |cut -d"," -f1)  #user id for dm-cache, unique for each user
 		./dm_one_user.sh -f $uid
@@ -80,7 +101,7 @@ elif [ "$1" == "-f1" ];then
 		echo "destroy dm-cache $uid ... done!"
 	done
 elif [ "$1" == "-f2" ];then 
-	for dm in $(cat dm_hotcold.conf)
+	for dm in $(grep dev dm_hotcold.conf)
 	do 
 		uid=$(echo $dm |cut -d"," -f1)  #user id for dm-cache, unique for each user
 		./dm_one_user_hotcold.sh -f $uid

@@ -9,7 +9,7 @@
  *	   -s: target device size
  *	   -t: replay time in seconds, 300 default
  *	   -r: replay rounds, 2 default, i.e., replay the trace 2 times
- *	   -w: write option (1 for write, 0 default)
+ *	   -w: write ratio, e.g., 20 means 20% IOs are write operations 
  *	   -d: debug option (1 for debug, 0 default)
  * device: target device
  *	trace: trace file
@@ -42,7 +42,7 @@ static int dev_open_flag = O_RDWR|O_DIRECT;//open flags on dev
 static int devfd;             // device fd
 static FILE* tracefd;         // trace fd
 static int debug = 0;         // debug option, 1 for debug
-static int is_write = 0;      // is write or not, read default
+static int w_ratio = 0;       // write ratio, [0,100]
 static uint32_t run_time = 0;   // run time of replay, 0 means no timeout
 static uint32_t burst_time = 0; // time interval to burst IO
 static uint32_t round = 1;      // how many rounds to replay the trace
@@ -98,7 +98,7 @@ int init_iocb(int n, int iosize)
             return -1;
         if (posix_memalign(&buf, alignment, iosize))
             return -1;
-        if ( is_write)
+        if (w_ratio)
             io_prep_pwrite(iocb_free[i], -1, buf, iosize, 0);
         else
             io_prep_pread(iocb_free[i], -1, buf, iosize, 0);
@@ -198,7 +198,7 @@ static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 
 static void usage(void)
 {
-    cerr<<"Usage: replay [-a align] [-b blksize] [-n num_io] [-s dev_size] [-t seconds] [-r rounds] [-D delay] [-w write] [-d debug] dev_name trace_name"<<endl;
+    cerr<<"Usage: replay [-a align] [-b blksize] [-n num_io] [-s dev_size] [-t seconds] [-r rounds] [-D delay] [-w write_ratio] [-d debug] dev_name trace_name"<<endl;
     exit(1);
 }
 
@@ -234,16 +234,18 @@ int replay_trace(FILE *tracefd)
     off_t offset = 0; // io offset on the target device
     nr_io = num;      // number of lbns left to replay
 
+	srand((unsigned)time(NULL)); //set random seed
+
 	if (debug)
 	{
 		cout<<"delay time = "<<delay.tv_usec<<"us"<<endl;
 		cout<<"burst time = "<<burst_time<<"s"<<endl;
 	}
+
     /* initialize io state machine */
     io_context_t myctx;
     memset(&myctx, 0, sizeof(myctx));
     io_queue_init(aio_maxio, &myctx);
-
     if (init_iocb(aio_maxio, aio_blksize) < 0)
     {
         cerr<<"Error allocating the i/o buffers"<<endl;
@@ -312,7 +314,8 @@ int replay_trace(FILE *tracefd)
                     cout<<"lbn = "<<lbn<<", offset = "<<offset<<", oblock = "<<oblock<<endl;
                 }
                 // prepare io struct and set callbak
-                if (is_write)
+				// if rand number is in [0,w_ratio], then we treat this io as a write
+                if (w_ratio && (rand()%100 < w_ratio))
                 {
                     io_prep_pwrite(io, devfd, io->u.c.buf, aio_blksize, offset);
                     io_set_callback(io, wr_done);
@@ -379,7 +382,7 @@ int main(int argc, char *const *argv)
     extern int optind;
 
     // parse the command arguments
-    while ((c = getopt(argc, argv, "a:b:n:s:t:dr:wD:m:I:")) != -1)
+    while ((c = getopt(argc, argv, "a:b:n:s:t:dr:w:D:m:I:")) != -1)
     {
         char *endp;
         switch (c)
@@ -414,8 +417,10 @@ int main(int argc, char *const *argv)
         case 'm':   // how many requests to replay
             max_io = atoi(optarg);
             break;
-        case 'w':   // write?
-            is_write = 1;
+        case 'w':   // write ratio, e.g., 20 means 20% write
+            w_ratio = atoi(optarg);
+			if((w_ratio > 100) || (w_ratio < 0))
+				usage();
             break;
         case 'd':   // debug?
             debug = 1;
