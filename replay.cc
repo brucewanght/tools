@@ -45,6 +45,7 @@ static int debug = 0;         // debug option, 1 for debug
 static int w_ratio = 0;       // write ratio, [0,100]
 static uint32_t run_time = 0;   // run time of replay, 0 means no timeout
 static uint32_t burst_time = 0; // time interval to burst IO
+static uint32_t max_delay = 0;  // maximal delay us
 static uint32_t round = 1;      // how many rounds to replay the trace
 static uint32_t max_lbn=0;      // max lbn number from trace
 
@@ -341,9 +342,10 @@ int replay_trace(FILE *tracefd)
 			// then we submit brust IOs in another specified time interval
 			if ((burst_time == 0) || ((rep_end.tv_sec - rep_last.tv_sec) < burst_time))
 			{
-				// delay a few seconds between ios if the delay is set
-                if (delay.tv_usec)
+                if (max_delay)
                 {
+					// randomly delay a few seconds between ios if the delay is set
+					delay.tv_usec = rand()%max_delay;
                     struct timeval t = delay;
 			    	/* Select is originally used to monitor status change of files, 
 			    	 * but here we can use it to delay some time that is smaller than
@@ -393,6 +395,7 @@ int main(int argc, char *const *argv)
             break;
         case 'D':   // delay in micro seconds between 2 ios
             delay.tv_usec = atoi(optarg);
+			max_delay = delay.tv_usec;
             break;
         case 'b':	// block size
             aio_blksize = strtoul(optarg, &endp, 0);
@@ -503,7 +506,7 @@ int main(int argc, char *const *argv)
 
     //out format: trace_name, device, data_size(GB), time_elapse(s), iops, bw(MB/s)
     cout<<trace_name<<", "<<dev_name<<", IO data size(GB)="<<1.0*data_size/1024/1024/1024
-        <<", time(s)="<<tc<<", iops="<<iops<<", BW(MB/s)="<<bw<<endl;
+        <<", write ratio="<<w_ratio<<", time(s)="<<tc<<", iops="<<iops<<", BW(MB/s)="<<bw<<endl;
 
     //close files
     if (devfd != -1)
