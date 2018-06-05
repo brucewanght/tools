@@ -60,6 +60,9 @@ elif [ "$1" = "-f" ];then
 	echo "detach meta devices"
 	losetup -d /dev/loop$2
 
+	echo "remove meta data"
+	rm /tmp/meta$2.img
+
 	echo "done"
 else
   echo "wrong parameter!"

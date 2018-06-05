@@ -43,11 +43,7 @@ if [ "$1" = "-i" ];then
 
 	echo "set meta device"
 
-    live=$(ls /tmp/ |grep meta$2.img) 
-	if [ "$live" == "" ];then 
-		echo "create metadata device"
-		dd if=/dev/zero of=/tmp/meta$2.img bs=1M count=4096
-	fi
+	dd if=/dev/zero of=/tmp/meta$2.img bs=1M count=4096
 	losetup /dev/loop$2 /tmp/meta$2.img 
 
 	#cache block size is 32K
@@ -79,6 +75,7 @@ elif [ "$1" = "-f" ];then
 
 	echo "detach meta devices"
 	losetup -d /dev/loop$2
+	rm /tmp/meta$2.img
 
 	echo "done"
 else

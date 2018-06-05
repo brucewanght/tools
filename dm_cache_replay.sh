@@ -67,7 +67,7 @@ fi
 #fi
 
 sectors=$(blockdev --getsz /dev/sdd)
-size=(1 2 4 10 50 100 200 400 800)
+size=(1 5 10 50 100 200 400 800)
 #mrcf="$trace"_"$policy"_"$ch".mrc
 #perf="$trace"_"$policy"_"$ch".perf
 mrcf="$trace"_"$policy".mrc
@@ -80,7 +80,7 @@ cnt=$(awk 'BEGIN{print '$tm'/'$int'}')
 for size in ${size[@]}
 do
 	echo "test cache size: $size"
-	./dm_one_user.sh -i 0 1 0 $size /dev/sdd /dev/nvme0n
+	./dm_one_user.sh -i 0 0 0 $size /dev/sdb /dev/cachedev
 	#nohup collectl -sDcm -i $int -c $cnt >"$perf"_"$size"& 
 	#-w means writing data 
 	#./replay -a 4K -b 4K -n 128 -s 900G -t $tm /dev/mapper/my_cache0 $trace_file >>$perf 
