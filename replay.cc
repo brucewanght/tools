@@ -5,7 +5,8 @@
  *	   -a: alignment
  *	   -b: blksize
  *	   -n: num of io submitted one time, i.e., io queue size
- *	   -D: delay_ms option
+ *	   -I: brust_s option
+ *	   -D: delay_us option
  *	   -s: target device size
  *	   -t: replay time in seconds, 300 default
  *	   -r: replay rounds, 2 default, i.e., replay the trace 2 times
@@ -14,7 +15,8 @@
  * device: target device
  *	trace: trace file
  *
- * Usage: replay [-a align] [-b blksize] [-n num_aio] [-w write] [-s dev_size] [-t seconds] [-r rounds] [-D delay] [-w write] [-d debug] device trace
+ * Usage: replay [-a align] [-b blksize] [-n num_aio] [-w write] [-s dev_size] [-t seconds] 
+ *               [-r rounds] [-I brust_s] [-D delay_us] [-w write] [-d debug] device trace
  */
 
 #include <stdio.h>
@@ -68,9 +70,9 @@ static double disk_size=0.0;       // disk size we need(GB)
 
 struct iocb **iocb_free;           // array of pointers to iocb
 struct timeval delay;	           // delay between i/o
-struct timespec rep_start,rep_end; //replay start and end time
-struct timespec rep_last;          //last submit time
-double tc;                         //time consumed
+struct timespec rep_start,rep_end; // replay start and end time
+struct timespec rep_last;          // last submit time
+double tc;                         // time consumed
 
 /* get file size */
 uint64_t get_file_size(const char* filename)
@@ -199,7 +201,8 @@ static void rd_done(io_context_t ctx, struct iocb *iocb, long res, long res2)
 
 static void usage(void)
 {
-    cerr<<"Usage: replay [-a align] [-b blksize] [-n num_io] [-s dev_size] [-t seconds] [-r rounds] [-D delay] [-w write_ratio] [-d debug] dev_name trace_name"<<endl;
+    cerr<<"Usage: replay [-a align] [-b blksize] [-n num_io] [-s dev_size] [-t seconds] [-r rounds]";
+	cerr<<"              [-I brust_s] [-D delay_us] [-w write_ratio] [-d debug] dev_name trace_name"<<endl;
     exit(1);
 }
 
@@ -340,7 +343,7 @@ int replay_trace(FILE *tracefd)
 
 			// if have set burst_time, we submit delayed IOs for burst_time seconds,
 			// then we submit brust IOs in another specified time interval
-			if ((burst_time == 0) || ((rep_end.tv_sec - rep_last.tv_sec) < burst_time))
+			if ((burst_time != 0) && ((rep_end.tv_sec - rep_last.tv_sec) < burst_time))
 			{
                 if (max_delay)
                 {
@@ -349,8 +352,7 @@ int replay_trace(FILE *tracefd)
                     struct timeval t = delay;
 			    	/* Select is originally used to monitor status change of files, 
 			    	 * but here we can use it to delay some time that is smaller than
-			    	 * 1 second.
-			    	 * See man 2 select for more information.
+			    	 * 1 second. See man 2 select for more information.
 			    	 */
                     (void)select(0, 0, 0, 0, &t);
                 }
