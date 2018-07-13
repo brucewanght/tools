@@ -65,7 +65,6 @@ def plotline(log, pids, xname, yname, **kwargs):
     perfs = autoread(log, pids)             #get performance data for pids
     avgperfs = []
     #avgperfs = np.mean(perfs, axis=1)       #get the mean value of every line (i.e., every pid)
-   
 
     for i in range(0,len(perfs)):
         lname='tenant-'+str(i)
